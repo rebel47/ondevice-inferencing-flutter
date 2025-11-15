@@ -24,7 +24,7 @@ android {
         applicationId = "com.example.ondevice_slm_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 26  // Required by llama_flutter_android (Android 8.0+)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -40,6 +40,23 @@ android {
     externalNativeBuild {
         cmake {
             version = "3.22.1"
+        }
+    }
+    
+    // CRITICAL: Prevent Android from stripping the llama.cpp native libraries
+    // Without this, the .so files will be removed during build
+    packaging {
+        jniLibs {
+            // Keep all .so files in these directories
+            keepDebugSymbols.add("**/arm64-v8a/*.so")
+            keepDebugSymbols.add("**/armeabi-v7a/*.so")
+        }
+        // Also prevent any compression or removal
+        resources {
+            pickFirsts.add("lib/arm64-v8a/libllama.so")
+            pickFirsts.add("lib/arm64-v8a/libggml_shared.so")
+            pickFirsts.add("lib/armeabi-v7a/libllama.so")
+            pickFirsts.add("lib/armeabi-v7a/libggml_shared.so")
         }
     }
 }

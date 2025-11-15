@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
-import 'package:llama_cpp_dart/llama_cpp_dart.dart';
+import 'package:llama_flutter_android/llama_flutter_android.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -10,11 +10,12 @@ import 'package:path_provider/path_provider.dart';
 import 'inference_service.dart';
 
 /// A service that loads a GGUF model (from app assets or from a remote URL)
-/// and streams generation tokens using llama_cpp_dart plugin.
+/// and streams generation tokens using llama_flutter_android plugin.
 class LlamaService implements InferenceService {
-  LlamaParent? _llamaParent;
+  LlamaController? _llamaController;
   bool _loaded = false;
   String? _currentModelPath;
+  StreamSubscription? _currentGeneration;
 
   /// Make sure [modelId] is available locally. If not, attempt to copy the
   /// model from assets (asset path is 'assets/models/<modelId>.gguf') or
@@ -91,26 +92,27 @@ class LlamaService implements InferenceService {
   }
 
   /// Load model and prepare for generation. If already loaded, this is a no-op.
-  Future<bool> loadModel(String modelPath, {int nThreads = 4, bool useGpu = true, int nGpuLayers = 0}) async {
+  Future<bool> loadModel(String modelPath, {int threads = 4, int contextSize = 2048}) async {
     if (_loaded && _currentModelPath == modelPath) return true;
 
+    // Cancel any ongoing generation
+    await stopGeneration();
+
     // Dispose previous instance if exists
-    if (_llamaParent != null) {
-      await _llamaParent!.dispose();
-      _llamaParent = null;
+    if (_llamaController != null) {
+      await _llamaController!.dispose();
+      _llamaController = null;
     }
 
     try {
-      final loadCommand = LlamaLoad(
-        path: modelPath,
-        modelParams: ModelParams(),
-        contextParams: ContextParams(),
-        samplingParams: SamplerParams(),
-        format: ChatMLFormat(),
+      _llamaController = LlamaController();
+      
+      await _llamaController!.loadModel(
+        modelPath: modelPath,
+        threads: threads,
+        contextSize: contextSize,
       );
-
-      _llamaParent = LlamaParent(loadCommand);
-      await _llamaParent!.init();
+      
       _loaded = true;
       _currentModelPath = modelPath;
       return true;
@@ -127,30 +129,32 @@ class LlamaService implements InferenceService {
     final modelPath = await ensureModelAvailable(model);
     await loadModel(modelPath);
 
-    if (_llamaParent == null) {
+    if (_llamaController == null) {
       throw Exception('Model not loaded');
     }
 
     final completer = Completer<String>();
     final buffer = StringBuffer();
 
-    final subscription = _llamaParent!.stream.listen(
-      (response) {
-        buffer.write(response);
+    _currentGeneration = _llamaController!.generate(
+      prompt: input,
+      maxTokens: 512,
+      temperature: 0.7,
+    ).listen(
+      (token) {
+        buffer.write(token);
       },
       onDone: () {
+        _currentGeneration = null;
         completer.complete(buffer.toString());
       },
       onError: (error) {
+        _currentGeneration = null;
         completer.completeError(error);
       },
     );
 
-    _llamaParent!.sendPrompt(input);
-
-    final result = await completer.future;
-    await subscription.cancel();
-    return result;
+    return await completer.future;
   }
 
   @override
@@ -158,22 +162,53 @@ class LlamaService implements InferenceService {
     final modelPath = await ensureModelAvailable(model);
     await loadModel(modelPath);
 
-    if (_llamaParent == null) {
+    if (_llamaController == null) {
       throw Exception('Model not loaded');
     }
 
-    _llamaParent!.sendPrompt(input);
+    // Cancel any previous generation
+    await stopGeneration();
+
+    // Create a stream controller to handle the generation
+    final controller = StreamController<String>();
     
-    await for (final token in _llamaParent!.stream) {
-      yield token;
+    _currentGeneration = _llamaController!.generate(
+      prompt: input,
+      maxTokens: 512,
+      temperature: 0.7,
+    ).listen(
+      (token) => controller.add(token),
+      onDone: () {
+        _currentGeneration = null;
+        controller.close();
+      },
+      onError: (error) {
+        _currentGeneration = null;
+        controller.addError(error);
+      },
+    );
+
+    yield* controller.stream;
+  }
+
+  /// Stop any ongoing generation
+  Future<void> stopGeneration() async {
+    if (_currentGeneration != null) {
+      await _currentGeneration!.cancel();
+      _currentGeneration = null;
+    }
+    if (_llamaController != null) {
+      await _llamaController!.stop();
     }
   }
 
   /// Clean up resources
   Future<void> dispose() async {
-    if (_llamaParent != null) {
-      await _llamaParent!.dispose();
-      _llamaParent = null;
+    await stopGeneration();
+    
+    if (_llamaController != null) {
+      await _llamaController!.dispose();
+      _llamaController = null;
     }
     _loaded = false;
     _currentModelPath = null;
