@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 import '../services/inference_service.dart';
 // Note: LlamaService is injected by main.dart; no direct import required here.
-import 'package:file_picker/file_picker.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
@@ -79,12 +79,16 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       return;
     }
-    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['gguf']);
-    if (result == null || result.files.isEmpty) return;
-    final path = result.files.single.path!;
+    final XTypeGroup ggufGroup = const XTypeGroup(
+      label: 'GGUF',
+      extensions: ['gguf'],
+    );
+  final XFile? xfile = await openFile(acceptedTypeGroups: <XTypeGroup>[ggufGroup]);
+  if (xfile == null) return;
+  final path = xfile.path;
     // Warn if model is large
-    final file = File(path);
-    final size = await file.length();
+  final selectedFile = File(path);
+  final size = await selectedFile.length();
     const warnSize = 500 * 1024 * 1024; // 500MB
     if (size >= warnSize) {
       final confirmed = await showDialog<bool>(
@@ -112,7 +116,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!await modelsDir.exists()) await modelsDir.create(recursive: true);
     final dest = File(p.join(modelsDir.path, p.basename(path)));
     if (!await dest.exists()) {
-      await File(path).copy(dest.path);
+      await selectedFile.copy(dest.path);
       await _scanLocalModels();
     }
   }

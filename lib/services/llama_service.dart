@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
-import 'package:flutter_llama/flutter_llama.dart';
+import 'package:llama_cpp_dart/llama_cpp_dart.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -10,10 +10,11 @@ import 'package:path_provider/path_provider.dart';
 import 'inference_service.dart';
 
 /// A service that loads a GGUF model (from app assets or from a remote URL)
-/// and streams generation tokens using flutter_llama plugin.
+/// and streams generation tokens using llama_cpp_dart plugin.
 class LlamaService implements InferenceService {
-  final FlutterLlama _llama = FlutterLlama.instance;
+  LlamaParent? _llamaParent;
   bool _loaded = false;
+  String? _currentModelPath;
 
   /// Make sure [modelId] is available locally. If not, attempt to copy the
   /// model from assets (asset path is 'assets/models/<modelId>.gguf') or
@@ -91,21 +92,33 @@ class LlamaService implements InferenceService {
 
   /// Load model and prepare for generation. If already loaded, this is a no-op.
   Future<bool> loadModel(String modelPath, {int nThreads = 4, bool useGpu = true, int nGpuLayers = 0}) async {
-    if (_loaded) return true;
+    if (_loaded && _currentModelPath == modelPath) return true;
 
-    final config = LlamaConfig(
-      modelPath: modelPath,
-      nThreads: nThreads,
-      nGpuLayers: nGpuLayers,
-      useGpu: useGpu,
-      contextSize: 2048,
-      batchSize: 512,
-      verbose: false,
-    );
+    // Dispose previous instance if exists
+    if (_llamaParent != null) {
+      await _llamaParent!.dispose();
+      _llamaParent = null;
+    }
 
-  final success = await _llama.loadModel(config);
-    _loaded = success;
-    return success;
+    try {
+      final loadCommand = LlamaLoad(
+        path: modelPath,
+        modelParams: ModelParams(),
+        contextParams: ContextParams(),
+        samplingParams: SamplerParams(),
+        format: ChatMLFormat(),
+      );
+
+      _llamaParent = LlamaParent(loadCommand);
+      await _llamaParent!.init();
+      _loaded = true;
+      _currentModelPath = modelPath;
+      return true;
+    } catch (e) {
+      print('Error loading model: $e');
+      _loaded = false;
+      return false;
+    }
   }
 
   @override
@@ -114,9 +127,30 @@ class LlamaService implements InferenceService {
     final modelPath = await ensureModelAvailable(model);
     await loadModel(modelPath);
 
-    final params = GenerationParams(prompt: input, maxTokens: 512);
-    final response = await _llama.generate(params);
-    return response.text;
+    if (_llamaParent == null) {
+      throw Exception('Model not loaded');
+    }
+
+    final completer = Completer<String>();
+    final buffer = StringBuffer();
+
+    final subscription = _llamaParent!.stream.listen(
+      (response) {
+        buffer.write(response);
+      },
+      onDone: () {
+        completer.complete(buffer.toString());
+      },
+      onError: (error) {
+        completer.completeError(error);
+      },
+    );
+
+    _llamaParent!.sendPrompt(input);
+
+    final result = await completer.future;
+    await subscription.cancel();
+    return result;
   }
 
   @override
@@ -124,10 +158,24 @@ class LlamaService implements InferenceService {
     final modelPath = await ensureModelAvailable(model);
     await loadModel(modelPath);
 
-    final params = GenerationParams(prompt: input, maxTokens: 512);
-    // generateStream yields each token as a string
-    await for (final token in _llama.generateStream(params)) {
+    if (_llamaParent == null) {
+      throw Exception('Model not loaded');
+    }
+
+    _llamaParent!.sendPrompt(input);
+    
+    await for (final token in _llamaParent!.stream) {
       yield token;
     }
+  }
+
+  /// Clean up resources
+  Future<void> dispose() async {
+    if (_llamaParent != null) {
+      await _llamaParent!.dispose();
+      _llamaParent = null;
+    }
+    _loaded = false;
+    _currentModelPath = null;
   }
 }

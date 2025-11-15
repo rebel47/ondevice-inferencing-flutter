@@ -37,6 +37,11 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+    externalNativeBuild {
+        cmake {
+            version = "3.22.1"
+        }
+    }
 }
 
 flutter {
