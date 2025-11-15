@@ -80,17 +80,22 @@ class _ChatScreenState extends State<ChatScreen> {
       
       if (xfile == null) return; // User cancelled
       
-      final path = xfile.path;
-      final selectedFile = File(path);
+      // Get file size directly from XFile to avoid loading into memory
+      final size = await xfile.length();
+      final fileName = xfile.name;
       
-      // Check if file exists and is readable
-      if (!await selectedFile.exists()) {
-        _showErrorDialog('File not found', 'The selected file could not be accessed.');
+      // Check size is reasonable (not zero)
+      if (size == 0) {
+        _showErrorDialog('Invalid file', 'The selected file appears to be empty.');
+        return;
+      }
+      // Check size is reasonable (not zero)
+      if (size == 0) {
+        _showErrorDialog('Invalid file', 'The selected file appears to be empty.');
         return;
       }
 
-      // Get file size and warn if large
-      final size = await selectedFile.length();
+      // Warn if large
       const warnSize = 500 * 1024 * 1024; // 500MB
       
       if (size >= warnSize) {
@@ -112,7 +117,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 children: [
                   CircularProgressIndicator(),
                   SizedBox(height: 16),
-                  Text('Copying model file...'),
+                  Text('Copying model file...\nThis may take a while for large files.'),
                 ],
               ),
             ),
@@ -121,16 +126,27 @@ class _ChatScreenState extends State<ChatScreen> {
       );
 
       try {
-        // Copy to app's documents directory
+        // Copy to app's documents directory using streaming to avoid OOM
         final doc = await getApplicationDocumentsDirectory();
         final modelsDir = Directory(p.join(doc.path, 'models'));
         if (!await modelsDir.exists()) await modelsDir.create(recursive: true);
         
-        final fileName = p.basename(path);
         final dest = File(p.join(modelsDir.path, fileName));
         
+        // Only copy if doesn't exist to avoid duplicates
         if (!await dest.exists()) {
-          await selectedFile.copy(dest.path);
+          // Use openRead to stream the file in chunks to avoid OOM
+          final stream = xfile.openRead();
+          final sink = dest.openWrite();
+          
+          try {
+            await for (final chunk in stream) {
+              sink.add(chunk);
+            }
+            await sink.flush();
+          } finally {
+            await sink.close();
+          }
         }
 
         // Update model selection
@@ -165,7 +181,7 @@ class _ChatScreenState extends State<ChatScreen> {
       } catch (e) {
         if (!mounted) return;
         Navigator.of(context).pop(); // Close loading dialog
-        _showErrorDialog('Copy failed', 'Failed to copy model file: $e');
+        _showErrorDialog('Copy failed', 'Failed to copy model file: $e\n\nTry using a smaller model file (< 2GB).');
       }
     } catch (e) {
       _showErrorDialog('Error', 'Failed to select file: $e');
