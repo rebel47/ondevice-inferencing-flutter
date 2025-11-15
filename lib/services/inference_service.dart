@@ -49,4 +49,7 @@ class MockInferenceService implements InferenceService {
     // No-op for mock
     return;
   }
+
+  @override
+  Future<List<String>> listLocalModels() async => [];
 }

@@ -31,19 +31,20 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _scanLocalModels() async {
+    // Ask service for local models first (plugin may manage models outside app dir)
+    final fromService = await widget.inferenceService.listLocalModels();
+
     final doc = await getApplicationDocumentsDirectory();
     final modelsDir = Directory(p.join(doc.path, 'models'));
-    if (!await modelsDir.exists()) {
-      await modelsDir.create(recursive: true);
-    }
+    if (!await modelsDir.exists()) await modelsDir.create(recursive: true);
 
-    final files = modelsDir
-        .listSync()
-        .whereType<File>()
-        .where((f) => f.path.endsWith('.gguf'))
-        .toList();
+    final files = modelsDir.listSync().whereType<File>().where((f) => f.path.endsWith('.gguf')).toList();
     setState(() {
       _availableModels = [for (final f in files) p.basenameWithoutExtension(f.path)];
+      // Add service-discovered models
+      for (final m in fromService) {
+        if (!_availableModels.contains(m)) _availableModels.add(m);
+      }
       // keep the currently selected model if present
       if (!_availableModels.contains(_model)) {
         _model = _availableModels.isNotEmpty ? _availableModels.first : _model;

@@ -75,6 +75,20 @@ class LlamaService implements InferenceService {
     await ensureModelAvailable(id, downloadUrl: downloadUrl);
   }
 
+  @override
+  Future<List<String>> listLocalModels() async {
+    final doc = await getApplicationDocumentsDirectory();
+    final modelsDir = Directory(p.join(doc.path, 'models'));
+    if (!await modelsDir.exists()) return [];
+    final files = modelsDir
+        .listSync()
+        .whereType<File>()
+        .where((f) => f.path.endsWith('.gguf'))
+        .map((f) => p.basenameWithoutExtension(f.path))
+        .toList();
+    return files;
+  }
+
   /// Load model and prepare for generation. If already loaded, this is a no-op.
   Future<bool> loadModel(String modelPath, {int nThreads = 4, bool useGpu = true, int nGpuLayers = 0}) async {
     if (_loaded) return true;
