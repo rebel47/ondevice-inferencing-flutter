@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 import '../services/inference_service.dart';
-import '../services/llama_service.dart';
+// Note: LlamaService is injected by main.dart; no direct import required here.
 import 'package:file_picker/file_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
@@ -23,11 +25,21 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loading = false;
   String _model = 'gemma';
   List<String> _availableModels = [];
+  static const _prefsLastModelKey = 'last_model';
 
   @override
   void initState() {
     super.initState();
     _scanLocalModels();
+    _loadLastSelectedModel();
+  }
+
+  Future<void> _loadLastSelectedModel() async {
+    final prefs = await SharedPreferences.getInstance();
+    final last = prefs.getString(_prefsLastModelKey);
+    if (last != null && last.isNotEmpty) {
+      setState(() => _model = last);
+    }
   }
 
   Future<void> _scanLocalModels() async {
@@ -53,10 +65,47 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _pickModelFromDevice() async {
+    // Check storage permission for older Android versions
+    if (!await _ensureStoragePermission()) {
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Permission required'),
+          content: const Text('The app needs storage permission to pick models from your device. Please grant permission in the app settings.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
     final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['gguf']);
     if (result == null || result.files.isEmpty) return;
     final path = result.files.single.path!;
+    // Warn if model is large
+    final file = File(path);
+    final size = await file.length();
+    const warnSize = 500 * 1024 * 1024; // 500MB
+    if (size >= warnSize) {
+      final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (_) => AlertDialog(
+              title: const Text('Large model file'),
+              content: Text('The selected model is ${(size / (1024 * 1024)).toStringAsFixed(1)} MB. This may take a long time to download or copy and can cause high memory usage. Continue?'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Continue')),
+              ],
+            ),
+          ) ??
+          false;
+      if (!confirmed) return;
+    }
+
     setState(() => _model = path);
+  // persist last model selection
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(_prefsLastModelKey, _model);
     // Optionally copy into documents models dir for later use
     final doc = await getApplicationDocumentsDirectory();
     final modelsDir = Directory(p.join(doc.path, 'models'));
@@ -66,6 +115,14 @@ class _ChatScreenState extends State<ChatScreen> {
       await File(path).copy(dest.path);
       await _scanLocalModels();
     }
+  }
+
+  Future<bool> _ensureStoragePermission() async {
+    final status = await Permission.storage.status;
+    if (status.isGranted) return true;
+    if (status.isPermanentlyDenied) return false;
+    final result = await Permission.storage.request();
+    return result.isGranted;
   }
 
   void _send() async {
@@ -106,6 +163,17 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: const Text('SLM Chat'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            onPressed: () => showDialog<void>(
+              context: context,
+              builder: (_) => AlertDialog(
+                title: const Text('File & Permissions'),
+                content: const Text('To pick a model from your device the app needs storage access (Android pre-13). Models can be large (100s of MB). Choose a GGUF file and be patient while it copies/downloads. If permission is denied, grant it in app settings.'),
+                actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
+              ),
+            ),
+          ),
           PopupMenuButton<String>(
             itemBuilder: (ctx) => [
               ..._availableModels.map((m) => PopupMenuItem(value: m, child: Text(m))),
@@ -116,6 +184,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 await _pickModelFromDevice();
               } else {
                 setState(() => _model = v);
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString(_prefsLastModelKey, _model);
               }
             },
             child: Row(children: [Text(_model), const Icon(Icons.arrow_drop_down)]),

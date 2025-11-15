@@ -42,3 +42,7 @@ Notes:
 - Phi-3 Mini Q4 is fast on mobile with quantization; performance depends on device.
 - The `flutter_llama` plugin streams tokens during generation; chat UI appends tokens as they arrive.
 - Example uses `LlamaService` in `lib/services` for model handling and token streaming.
+
+Permissions and file picker notes
+- If you choose a model from the device using the app's file picker, the app may request storage permissions on Android (pre-Android 13). If the permission is denied, the file picker won't work — grant it through the system settings and try again.
+- Model files can be large (100s of MB). When picking from the device the app will warn if a model is bigger than 500MB and you can cancel or continue. Copying a model to app storage will make it available for future use.
