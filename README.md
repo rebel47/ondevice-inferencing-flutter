@@ -1,48 +1,160 @@
-# OnDevice SLM Starter App
+# OnDevice SLM App
 
-This is a minimal Flutter starter application scaffolded for the OnDevice SLM inference workspace.
+A Flutter application for running large language models (LLMs) entirely on-device with a modern, privacy-focused interface.
 
-## Getting started
+## Features
 
-Prerequisites:
-- Flutter SDK installed (stable channel). Follow https://flutter.dev/docs/get-started/install
+- 🔒 **Fully Offline** - No internet required, all processing happens on your device
+- 🛡️ **Private & Secure** - Your data never leaves your device
+- ⚡ **Fast Inference** - Optimized for mobile with GGUF quantized models
+- 🎨 **Modern UI** - Clean Material Design 3 interface with gradient backgrounds
+- 📱 **Easy Model Management** - Import GGUF models directly from your device
+- 💬 **Real-time Chat** - Streaming token generation with modern chat bubbles
 
-Start the app (PowerShell):
+## Getting Started
 
+### Prerequisites
+- Flutter SDK (stable channel) - [Installation Guide](https://flutter.dev/docs/get-started/install)
+- Android NDK 27.0.12077973 (for building native libraries)
+- CMake 3.18.1 or higher
+
+### Installation
+
+1. Clone the repository:
 ```powershell
-cd "f:\Startup\OnDevice SLM Inferecing\ondevice_slm_app"
+git clone https://github.com/rebel47/ondevice-inferencing-flutter.git
+cd ondevice_slm_app
+```
+
+2. Install dependencies:
+```powershell
 flutter pub get
+```
+
+3. Run the app:
+```powershell
 flutter run -d <device-id>   # or 'flutter run' to choose a device
 ```
 
-Run tests:
+### Development Commands
 
+Run tests:
 ```powershell
 flutter test
 ```
 
-Formatting and analyze:
-
+Format code:
 ```powershell
 flutter format .
+```
+
+Analyze code:
+```powershell
 flutter analyze
 ```
 
-This scaffold contains a simple counter and a starting Home screen. Add features as needed.
+## On-Device LLM Inference
 
-## On-device LLM (Phi-3 Mini via flutter_llama)
+This app uses `llama_cpp_dart` (v0.1.2+1) to run GGUF quantized models directly on your device.
 
-This project includes a `Chat` screen that uses `flutter_llama` to run a GGUF model on device. It expects a GGUF file, for example `phi-3-mini-q4.gguf`.
+### Supported Models
+- Any GGUF format model (Llama, Phi, Gemma, etc.)
+- Recommended: 4-bit quantized models for optimal performance
+- Examples: `phi-3-mini-q4.gguf`, `gemma-2b-q4.gguf`, `llama-3.2-1b-q4.gguf`
 
-How to provide a model:
-1. Copy a GGUF model to the `assets/models/` directory with file name `phi-3-mini.gguf` and run `flutter pub get`. The example code will copy it to the app's documents dir on launch.
-2. Or host the model on HTTP and update `ChatScreen` to pass a download URL to `prepareModel`.
+### How to Add Models
 
-Notes:
-- Phi-3 Mini Q4 is fast on mobile with quantization; performance depends on device.
-- The `flutter_llama` plugin streams tokens during generation; chat UI appends tokens as they arrive.
-- Example uses `LlamaService` in `lib/services` for model handling and token streaming.
+**Option 1: Import from Device (Recommended)**
+1. Launch the app and navigate to the Chat screen
+2. Tap the model selector icon in the app bar
+3. Select "Import from device"
+4. Choose your GGUF model file from the file picker
+5. The app will copy it to app storage for future use
 
-Permissions and file picker notes
-- If you choose a model from the device using the app's file picker, the app may request storage permissions on Android (pre-Android 13). If the permission is denied, the file picker won't work — grant it through the system settings and try again.
-- Model files can be large (100s of MB). When picking from the device the app will warn if a model is bigger than 500MB and you can cancel or continue. Copying a model to app storage will make it available for future use.
+**Option 2: Pre-bundle Models**
+1. Place GGUF files in `assets/models/` directory
+2. Add them to `pubspec.yaml` under assets
+3. Run `flutter pub get`
+4. The app will detect and list them automatically
+
+**Option 3: Download from URL**
+- Update `ChatScreen._pickModelFromDevice()` to support HTTP downloads
+- Implement progress tracking for large file downloads
+
+### Performance Notes
+
+- **Quantization**: 4-bit (Q4) models offer the best balance of speed and quality
+- **Model Size**: Smaller models (1B-3B parameters) run faster on mobile devices
+- **Memory**: Ensure device has sufficient RAM (4GB+ recommended for 3B models)
+- **Storage**: Models can be 500MB-2GB+ depending on size and quantization
+
+### File Picker & Permissions
+
+The app uses Android's Storage Access Framework (SAF) which handles file access permissions automatically:
+- **No runtime permissions needed** - The system manages access
+- **Large file warnings** - Alerts when selecting files > 500MB
+- **File validation** - Checks that selected files exist and are readable
+- **Persistent access** - Models are copied to app storage for future use
+
+## Architecture
+
+```
+lib/
+├── main.dart                 # App entry point
+├── models/
+│   └── chat_message.dart    # Message data model
+├── screens/
+│   ├── home_screen.dart     # Landing page with app features
+│   └── chat_screen.dart     # Chat interface with model management
+├── services/
+│   ├── inference_service.dart  # Abstract inference interface
+│   └── llama_service.dart      # llama_cpp_dart implementation
+└── widgets/
+    └── chat_bubble.dart     # Chat message bubble component
+```
+
+## Documentation
+
+- [Setup Guide](SETUP.md) - Native library setup and build instructions
+- [UI Improvements](UI_IMPROVEMENTS.md) - Complete UI redesign documentation
+- [Permission Flow](PERMISSION_FLOW.md) - File access and permission handling
+
+## Troubleshooting
+
+### Build Issues
+- Ensure Android NDK 27 is installed
+- Check CMake version (3.18.1+)
+- Run `flutter clean` and rebuild
+
+### Model Loading Fails
+- Verify GGUF file is not corrupted
+- Check available device memory
+- Try a smaller quantized model
+
+### File Picker Not Working
+- The app uses SAF - no permissions should be needed
+- Try restarting the app
+- Check device storage is not full
+
+## Technology Stack
+
+- **Framework**: Flutter 3.x
+- **Language**: Dart
+- **LLM Runtime**: llama_cpp_dart ^0.1.2+1
+- **File Picker**: file_selector ^1.0.4
+- **Storage**: path_provider, shared_preferences
+- **UI**: Material Design 3
+
+## Contributing
+
+Contributions are welcome! Please read the contribution guidelines before submitting PRs.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- Built with [llama_cpp_dart](https://pub.dev/packages/llama_cpp_dart)
+- Powered by [llama.cpp](https://github.com/ggerganov/llama.cpp)
+- UI inspired by modern Material Design principles

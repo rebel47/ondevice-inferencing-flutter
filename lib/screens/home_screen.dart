@@ -1,21 +1,7 @@
 import 'package:flutter/material.dart';
-import '../widgets/counter_widget.dart';
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
-
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
-}
-
-class _HomeScreenState extends State<HomeScreen> {
-  int _count = 0;
-
-  void _increment() {
-    setState(() {
-      _count += 1;
-    });
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -75,22 +61,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 40),
-
-                // Counter Widget (for demo purposes)
-                Card(
-                  elevation: 4,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(24.0),
-                    child: CounterWidget(
-                      count: _count,
-                      onIncrement: _increment,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 32),
                 
                 // Main CTA Button
                 SizedBox(
@@ -132,18 +102,21 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const SizedBox(height: 12),
                         _buildFeatureItem(
+                          context,
                           Icons.offline_bolt,
                           'Fully Offline',
                           'No internet required',
                         ),
                         const SizedBox(height: 8),
                         _buildFeatureItem(
+                          context,
                           Icons.security,
                           'Private & Secure',
                           'Data stays on your device',
                         ),
                         const SizedBox(height: 8),
                         _buildFeatureItem(
+                          context,
                           Icons.speed,
                           'Fast Inference',
                           'Optimized for mobile',
@@ -165,7 +138,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildFeatureItem(IconData icon, String title, String subtitle) {
+  Widget _buildFeatureItem(BuildContext context, IconData icon, String title, String subtitle) {
     return Row(
       children: [
         Container(

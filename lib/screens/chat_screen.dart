@@ -3,7 +3,6 @@ import '../models/chat_message.dart';
 import '../services/inference_service.dart';
 // Note: LlamaService is injected by main.dart; no direct import required here.
 import 'package:file_selector/file_selector.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -65,12 +64,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _pickModelFromDevice() async {
-    // Request storage permission with detailed dialog
-    if (!await _requestStoragePermission()) {
-      return;
-    }
-
+    // Note: On Android, file_selector uses Storage Access Framework (SAF)
+    // which doesn't require runtime permissions. The system file picker
+    // handles all permission checks automatically.
+    
     try {
+      // Show file picker directly - no permission dialogs needed
       final XTypeGroup ggufGroup = const XTypeGroup(
         label: 'GGUF Model Files',
         extensions: ['gguf'],
@@ -79,7 +78,7 @@ class _ChatScreenState extends State<ChatScreen> {
         acceptedTypeGroups: <XTypeGroup>[ggufGroup],
       );
       
-      if (xfile == null) return;
+      if (xfile == null) return; // User cancelled
       
       final path = xfile.path;
       final selectedFile = File(path);
@@ -171,85 +170,6 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       _showErrorDialog('Error', 'Failed to select file: $e');
     }
-  }
-
-  Future<bool> _requestStoragePermission() async {
-    // For Android 13+ (API 33+), we don't need storage permission for file picker
-    // For older versions, we need storage permission
-    final status = await Permission.storage.status;
-    
-    if (status.isGranted) return true;
-    
-    if (status.isPermanentlyDenied) {
-      final openSettings = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          icon: const Icon(Icons.warning_amber_rounded, size: 48, color: Colors.orange),
-          title: const Text('Storage Permission Required'),
-          content: const Text(
-            'This app needs storage permission to access model files from your device. '
-            'The permission has been permanently denied. Please enable it in app settings.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton.icon(
-              onPressed: () => Navigator.pop(context, true),
-              icon: const Icon(Icons.settings),
-              label: const Text('Open Settings'),
-            ),
-          ],
-        ),
-      ) ?? false;
-      
-      if (openSettings) {
-        await openAppSettings();
-      }
-      return false;
-    }
-    
-    if (status.isDenied) {
-      // Show explanation before requesting
-      final shouldRequest = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          icon: const Icon(Icons.folder_open, size: 48, color: Colors.blue),
-          title: const Text('Storage Access Needed'),
-          content: const Text(
-            'To select GGUF model files from your device, this app needs permission to access your storage.\n\n'
-            'Your privacy is protected - we only read the specific model files you choose.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Grant Permission'),
-            ),
-          ],
-        ),
-      ) ?? false;
-      
-      if (!shouldRequest) return false;
-      
-      final result = await Permission.storage.request();
-      
-      if (result.isGranted) {
-        return true;
-      } else if (result.isPermanentlyDenied) {
-        _showErrorDialog(
-          'Permission Denied',
-          'Storage permission is required to select model files. Please enable it in app settings.',
-        );
-      }
-      return result.isGranted;
-    }
-    
-    return false;
   }
 
   Future<bool> _showLargeFileDialog(int size) async {
