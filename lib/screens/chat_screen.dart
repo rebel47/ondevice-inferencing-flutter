@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 import '../services/inference_service.dart';
+import '../services/llama_service.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'dart:io';
 import '../widgets/chat_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -17,6 +22,50 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   bool _loading = false;
   String _model = 'gemma';
+  List<String> _availableModels = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _scanLocalModels();
+  }
+
+  Future<void> _scanLocalModels() async {
+    final doc = await getApplicationDocumentsDirectory();
+    final modelsDir = Directory(p.join(doc.path, 'models'));
+    if (!await modelsDir.exists()) {
+      await modelsDir.create(recursive: true);
+    }
+
+    final files = modelsDir
+        .listSync()
+        .whereType<File>()
+        .where((f) => f.path.endsWith('.gguf'))
+        .toList();
+    setState(() {
+      _availableModels = [for (final f in files) p.basenameWithoutExtension(f.path)];
+      // keep the currently selected model if present
+      if (!_availableModels.contains(_model)) {
+        _model = _availableModels.isNotEmpty ? _availableModels.first : _model;
+      }
+    });
+  }
+
+  Future<void> _pickModelFromDevice() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['gguf']);
+    if (result == null || result.files.isEmpty) return;
+    final path = result.files.single.path!;
+    setState(() => _model = path);
+    // Optionally copy into documents models dir for later use
+    final doc = await getApplicationDocumentsDirectory();
+    final modelsDir = Directory(p.join(doc.path, 'models'));
+    if (!await modelsDir.exists()) await modelsDir.create(recursive: true);
+    final dest = File(p.join(modelsDir.path, p.basename(path)));
+    if (!await dest.exists()) {
+      await File(path).copy(dest.path);
+      await _scanLocalModels();
+    }
+  }
 
   void _send() async {
     final text = _controller.text.trim();
@@ -56,15 +105,19 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: const Text('SLM Chat'),
         actions: [
-          DropdownButton<String>(
-            value: _model,
-            underline: const SizedBox.shrink(),
-            items: const [
-              DropdownMenuItem(value: 'gemma', child: Text('Gemma')),
-              DropdownMenuItem(value: 'phi', child: Text('Phi')),
-              DropdownMenuItem(value: 'smollm', child: Text('SmolLM')),
+          PopupMenuButton<String>(
+            itemBuilder: (ctx) => [
+              ..._availableModels.map((m) => PopupMenuItem(value: m, child: Text(m))),
+              const PopupMenuItem(value: '__pick__', child: Text('Choose model from device')),
             ],
-            onChanged: (v) => setState(() => _model = v ?? 'gemma'),
+            onSelected: (v) async {
+              if (v == '__pick__') {
+                await _pickModelFromDevice();
+              } else {
+                setState(() => _model = v);
+              }
+            },
+            child: Row(children: [Text(_model), const Icon(Icons.arrow_drop_down)]),
           ),
         ],
       ),

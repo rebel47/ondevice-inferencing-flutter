@@ -19,17 +19,23 @@ class LlamaService implements InferenceService {
   /// model from assets (asset path is 'assets/models/<modelId>.gguf') or
   /// download from the provided [downloadUrl]. Returns the absolute file path
   /// to the GGUF file.
-  Future<String> ensureModelAvailable(String modelId, {String? downloadUrl}) async {
+  Future<String> ensureModelAvailable(String modelIdOrPath, {String? downloadUrl}) async {
     final docDir = await getApplicationDocumentsDirectory();
     final modelsDir = Directory(p.join(docDir.path, 'models'));
     if (!await modelsDir.exists()) await modelsDir.create(recursive: true);
 
+    // If the provided string looks like a path to an existing local file, use it.
+    if (modelIdOrPath.contains(Platform.pathSeparator) && await File(modelIdOrPath).exists()) {
+      return modelIdOrPath;
+    }
+
+    final modelId = modelIdOrPath;
     final dest = p.join(modelsDir.path, '$modelId.gguf');
     final destFile = File(dest);
     if (await destFile.exists()) return dest;
 
     // Try assets first
-    final assetPath = 'assets/models/$modelId.gguf';
+  final assetPath = 'assets/models/$modelId.gguf';
     try {
       final bytes = await rootBundle.load(assetPath);
       await destFile.writeAsBytes(bytes.buffer.asUint8List());
@@ -83,7 +89,7 @@ class LlamaService implements InferenceService {
       verbose: false,
     );
 
-    final success = await _llama.loadModel(config);
+  final success = await _llama.loadModel(config);
     _loaded = success;
     return success;
   }
@@ -91,9 +97,8 @@ class LlamaService implements InferenceService {
   @override
   Future<String> generateReply(String input, String model) async {
     // Convenience - run a blocking generation. Ensure model loaded first.
-    final doc = await getApplicationDocumentsDirectory();
-    final path = p.join(doc.path, 'models', '$model.gguf');
-    await loadModel(path);
+    final modelPath = await ensureModelAvailable(model);
+    await loadModel(modelPath);
 
     final params = GenerationParams(prompt: input, maxTokens: 512);
     final response = await _llama.generate(params);
@@ -102,9 +107,8 @@ class LlamaService implements InferenceService {
 
   @override
   Stream<String> generateReplyStream(String input, String model) async* {
-    final doc = await getApplicationDocumentsDirectory();
-    final path = p.join(doc.path, 'models', '$model.gguf');
-    await loadModel(path);
+    final modelPath = await ensureModelAvailable(model);
+    await loadModel(modelPath);
 
     final params = GenerationParams(prompt: input, maxTokens: 512);
     // generateStream yields each token as a string

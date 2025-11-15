@@ -10,6 +10,9 @@ abstract class InferenceService {
 
   /// Optional: prepare or download model resources on device. Default noop.
   Future<void> prepareModel(String model, {String? downloadUrl});
+
+  /// List models available in the app's models directory. Default empty list.
+  Future<List<String>> listLocalModels();
 }
 
 /// A very small stub used for local development/tests. Replace with real
