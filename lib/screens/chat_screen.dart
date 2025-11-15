@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 import '../services/inference_service.dart';
 // Note: LlamaService is injected by main.dart; no direct import required here.
-import 'package:file_selector/file_selector.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import '../widgets/chat_bubble.dart';
 
@@ -42,82 +42,140 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _scanLocalModels() async {
-    // Ask service for local models first (plugin may manage models outside app dir)
-    final fromService = await widget.inferenceService.listLocalModels();
-
-    final doc = await getApplicationDocumentsDirectory();
-    final modelsDir = Directory(p.join(doc.path, 'models'));
-    if (!await modelsDir.exists()) await modelsDir.create(recursive: true);
-
-    final files = modelsDir.listSync().whereType<File>().where((f) => f.path.endsWith('.gguf')).toList();
-    setState(() {
-      _availableModels = [for (final f in files) p.basenameWithoutExtension(f.path)];
-      // Add service-discovered models
-      for (final m in fromService) {
-        if (!_availableModels.contains(m)) _availableModels.add(m);
+    final Set<String> foundModels = {};
+    
+    // 1. Scan app's internal documents directory
+    try {
+      final doc = await getApplicationDocumentsDirectory();
+      final modelsDir = Directory(p.join(doc.path, 'models'));
+      if (await modelsDir.exists()) {
+        final files = modelsDir.listSync().whereType<File>().where((f) => f.path.endsWith('.gguf')).toList();
+        for (final f in files) {
+          foundModels.add(p.basenameWithoutExtension(f.path));
+        }
       }
-      // keep the currently selected model if present
-      if (!_availableModels.contains(_model)) {
-        _model = _availableModels.isNotEmpty ? _availableModels.first : _model;
+    } catch (e) {
+      print('Error scanning documents directory: $e');
+    }
+
+    // 2. Scan app's external storage directory (Android/data/...)
+    try {
+      final externalDir = await getApplicationDocumentsDirectory();
+      // On Android, getExternalStorageDirectory() gives us Android/data/package/files
+      final externalModelsDir = Directory(p.join(externalDir.path, 'models'));
+      if (await externalModelsDir.exists()) {
+        final files = externalModelsDir.listSync().whereType<File>().where((f) => f.path.endsWith('.gguf')).toList();
+        for (final f in files) {
+          foundModels.add(p.basenameWithoutExtension(f.path));
+        }
+      }
+    } catch (e) {
+      print('Error scanning external directory: $e');
+    }
+
+    // 3. Scan common Download locations
+    try {
+      // Try /storage/emulated/0/Download
+      final downloadDir = Directory('/storage/emulated/0/Download');
+      if (await downloadDir.exists()) {
+        final files = downloadDir.listSync().whereType<File>().where((f) => f.path.endsWith('.gguf')).toList();
+        for (final f in files) {
+          foundModels.add(p.basenameWithoutExtension(f.path));
+        }
+      }
+    } catch (e) {
+      print('Error scanning Download directory: $e');
+    }
+
+    // 4. Ask service for any models it knows about
+    try {
+      final fromService = await widget.inferenceService.listLocalModels();
+      foundModels.addAll(fromService);
+    } catch (e) {
+      print('Error getting models from service: $e');
+    }
+
+    setState(() {
+      _availableModels = foundModels.toList()..sort();
+      // Keep the currently selected model if present
+      if (!_availableModels.contains(_model) && _availableModels.isNotEmpty) {
+        _model = _availableModels.first;
       }
     });
   }
 
-  Future<void> _pickModelFromDevice() async {
-    // Note: On Android, file_selector uses Storage Access Framework (SAF)
-    // which doesn't require runtime permissions. The system file picker
-    // handles all permission checks automatically.
-    
+  /// Memory-safe file import using file_picker.
+  /// This only gets the file PATH, not the file contents, so it works with files of ANY size.
+  Future<void> _importModelFromDevice() async {
     try {
-      // Show file picker directly - no permission dialogs needed
-      final XTypeGroup ggufGroup = const XTypeGroup(
-        label: 'GGUF Model Files',
-        extensions: ['gguf'],
+      print('Opening file picker...');
+      
+      // CRITICAL: withData: false means we only get the path, NOT the bytes.
+      // This is why it won't crash with large files.
+      // Using FileType.any because .gguf is not a recognized MIME type on Android
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.any, // Allow any file type
+        withData: false, // KEY: Do not load file into memory!
       );
-      final XFile? xfile = await openFile(
-        acceptedTypeGroups: <XTypeGroup>[ggufGroup],
-      );
-      
-      if (xfile == null) return; // User cancelled
-      
-      // Get file size directly from XFile to avoid loading into memory
-      final size = await xfile.length();
-      final fileName = xfile.name;
-      
-      // Check size is reasonable (not zero)
-      if (size == 0) {
-        _showErrorDialog('Invalid file', 'The selected file appears to be empty.');
-        return;
+
+      if (result == null || result.files.single.path == null) {
+        print('File selection canceled');
+        return; // User cancelled
       }
-      // Check size is reasonable (not zero)
-      if (size == 0) {
-        _showErrorDialog('Invalid file', 'The selected file appears to be empty.');
+
+      // Get file info
+      final String sourcePath = result.files.single.path!;
+      final String fileName = result.files.single.name;
+      final int fileSize = result.files.single.size;
+
+      // Validate it's a .gguf file
+      if (!fileName.toLowerCase().endsWith('.gguf')) {
+        print('Invalid file type: $fileName');
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            icon: const Icon(Icons.error_outline, size: 48, color: Colors.orange),
+            title: const Text('Invalid File Type'),
+            content: Text(
+              'Please select a .gguf model file.\n\n'
+              'Selected: $fileName',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
         return;
       }
 
-      // Warn if large
-      const warnSize = 500 * 1024 * 1024; // 500MB
-      
-      if (size >= warnSize) {
-        final confirmed = await _showLargeFileDialog(size);
-        if (!confirmed) return;
-      }
+      // SUCCESS: Valid .gguf file selected, and we only have the path (not file bytes in memory)
 
-      // Show loading dialog while copying
+      print('File selected: $fileName ($fileSize bytes)');
+      print('Path: $sourcePath');
+
+      // Show loading dialog
       if (!mounted) return;
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (_) => const Center(
+        builder: (_) => Center(
           child: Card(
             child: Padding(
-              padding: EdgeInsets.all(24.0),
+              padding: const EdgeInsets.all(24.0),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Copying model file...\nThis may take a while for large files.'),
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text('Copying $fileName...'),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Size: ${(fileSize / (1024 * 1024)).toStringAsFixed(1)} MB',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
                 ],
               ),
             ),
@@ -126,42 +184,95 @@ class _ChatScreenState extends State<ChatScreen> {
       );
 
       try {
-        // Copy to app's documents directory using streaming to avoid OOM
+        // Get destination directory
         final doc = await getApplicationDocumentsDirectory();
         final modelsDir = Directory(p.join(doc.path, 'models'));
-        if (!await modelsDir.exists()) await modelsDir.create(recursive: true);
-        
-        final dest = File(p.join(modelsDir.path, fileName));
-        
-        // Only copy if doesn't exist to avoid duplicates
-        if (!await dest.exists()) {
-          // Use openRead to stream the file in chunks to avoid OOM
-          final stream = xfile.openRead();
-          final sink = dest.openWrite();
-          
-          try {
-            await for (final chunk in stream) {
-              sink.add(chunk);
-            }
-            await sink.flush();
-          } finally {
-            await sink.close();
-          }
+        if (!await modelsDir.exists()) {
+          await modelsDir.create(recursive: true);
         }
+
+        final destPath = p.join(modelsDir.path, fileName);
+        final destFile = File(destPath);
+
+        // Check if file already exists
+        if (await destFile.exists()) {
+          if (!mounted) return;
+          Navigator.of(context).pop(); // Close loading dialog
+
+          final overwrite = await showDialog<bool>(
+            context: context,
+            builder: (_) => AlertDialog(
+              icon: const Icon(Icons.warning_amber_rounded, size: 48, color: Colors.orange),
+              title: const Text('File Already Exists'),
+              content: Text('A model named "$fileName" already exists. Overwrite?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Overwrite'),
+                ),
+              ],
+            ),
+          );
+
+          if (overwrite != true) return;
+
+          // Show loading dialog again
+          if (!mounted) return;
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => const Center(
+              child: Card(
+                child: Padding(
+                  padding: EdgeInsets.all(24.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text('Copying file...'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        // MEMORY-SAFE COPY: Stream the file in chunks
+        // This works for ANY file size without loading it all into memory
+        final sourceFile = File(sourcePath);
+        final inputStream = sourceFile.openRead();
+        final outputSink = destFile.openWrite();
+
+        try {
+          await for (final chunk in inputStream) {
+            outputSink.add(chunk);
+          }
+          await outputSink.flush();
+        } finally {
+          await outputSink.close();
+        }
+
+        print('File copied successfully to: $destPath');
 
         // Update model selection
         setState(() => _model = p.basenameWithoutExtension(fileName));
-        
+
         // Save preference
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString(_prefsLastModelKey, _model);
-        
+
         // Refresh model list
         await _scanLocalModels();
-        
+
         if (!mounted) return;
         Navigator.of(context).pop(); // Close loading dialog
-        
+
         // Show success message
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -170,7 +281,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 const Icon(Icons.check_circle, color: Colors.white),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Text('Model "$fileName" loaded successfully'),
+                  child: Text('Model "$fileName" imported successfully!'),
                 ),
               ],
             ),
@@ -179,54 +290,42 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       } catch (e) {
+        print('Error copying file: $e');
         if (!mounted) return;
         Navigator.of(context).pop(); // Close loading dialog
-        _showErrorDialog('Copy failed', 'Failed to copy model file: $e\n\nTry using a smaller model file (< 2GB).');
+
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            icon: const Icon(Icons.error_outline, size: 48, color: Colors.red),
+            title: const Text('Import Failed'),
+            content: Text('Failed to copy model file: $e'),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
       }
     } catch (e) {
-      _showErrorDialog('Error', 'Failed to select file: $e');
-    }
-  }
-
-  Future<bool> _showLargeFileDialog(int size) async {
-    return await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        icon: const Icon(Icons.warning_amber_rounded, size: 48, color: Colors.orange),
-        title: const Text('Large Model File'),
-        content: Text(
-          'The selected model is ${(size / (1024 * 1024)).toStringAsFixed(1)} MB.\n\n'
-          'This may take time to copy and can use significant memory. Continue?',
+      print('Error selecting file: $e');
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          icon: const Icon(Icons.error_outline, size: 48, color: Colors.red),
+          title: const Text('Selection Failed'),
+          content: Text('Failed to open file picker: $e'),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    ) ?? false;
-  }
-
-  void _showErrorDialog(String title, String message) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        icon: const Icon(Icons.error_outline, size: 48, color: Colors.red),
-        title: Text(title),
-        content: Text(message),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
+      );
+    }
   }
 
   void _send() async {
@@ -315,7 +414,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 )),
               const PopupMenuDivider(),
               const PopupMenuItem(
-                value: '__pick__',
+                value: '__import__',
                 child: Row(
                   children: [
                     Icon(Icons.upload_file, size: 18),
@@ -324,10 +423,29 @@ class _ChatScreenState extends State<ChatScreen> {
                   ],
                 ),
               ),
+              const PopupMenuItem(
+                value: '__refresh__',
+                child: Row(
+                  children: [
+                    Icon(Icons.refresh, size: 18),
+                    SizedBox(width: 8),
+                    Text('Refresh model list', style: TextStyle(fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
             ],
             onSelected: (v) async {
-              if (v == '__pick__') {
-                await _pickModelFromDevice();
+              if (v == '__import__') {
+                await _importModelFromDevice();
+              } else if (v == '__refresh__') {
+                await _scanLocalModels();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Found ${_availableModels.length} model(s)'),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
               } else {
                 setState(() => _model = v);
                 final prefs = await SharedPreferences.getInstance();
@@ -349,7 +467,7 @@ class _ChatScreenState extends State<ChatScreen> {
               context: context,
               builder: (_) => AlertDialog(
                 icon: const Icon(Icons.psychology, size: 48),
-                title: const Text('About Models & Permissions'),
+                title: const Text('About Models'),
                 content: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -366,13 +484,20 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                       const SizedBox(height: 16),
                       const Text(
-                        'Storage Permission',
+                        'How to Add Models',
                         style: TextStyle(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 8),
                       const Text(
-                        'On Android versions below 13, storage permission is required to '
-                        'import model files from your device. The app only accesses files you explicitly select.',
+                        'Option 1: Import from Device\n'
+                        '• Tap "Import from device" in the model menu\n'
+                        '• Select any .gguf file (works with files of ANY size!)\n'
+                        '• File will be copied to app storage\n\n'
+                        'Option 2: Manual Placement\n'
+                        '• Download folder\n'
+                        '• Android/data/com.example.ondevice_slm_app/files/models/\n\n'
+                        'Then tap "Refresh model list" to scan.',
+                        style: TextStyle(fontSize: 12),
                       ),
                       const SizedBox(height: 16),
                       Container(

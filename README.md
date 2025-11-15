@@ -64,14 +64,27 @@ This app uses `llama_cpp_dart` (v0.1.2+1) to run GGUF quantized models directly 
 
 ### How to Add Models
 
-**Option 1: Import from Device (Recommended)**
+**Option 1: Direct File Placement (Recommended for Large Models)**
+
+For models larger than 1GB, place them directly in the app's external storage directory to avoid memory issues:
+
+1. Connect your Android device to your computer
+2. Navigate to: `Android/data/com.example.ondevice_slm_app/files/models/`
+3. Copy your GGUF model files to this directory
+4. Restart the app - models will be automatically detected
+
+**Option 2: Import from Device (Best for Small Models < 1GB)**
+
 1. Launch the app and navigate to the Chat screen
 2. Tap the model selector icon in the app bar
 3. Select "Import from device"
-4. Choose your GGUF model file from the file picker
-5. The app will copy it to app storage for future use
+4. Read the warning about file size limitations
+5. Choose your GGUF model file from the file picker
+6. The app will copy it to app storage for future use
 
-**Option 2: Pre-bundle Models**
+> ⚠️ **Note**: The Android file picker may crash with very large files (>1GB) due to memory limitations. Use Option 1 for large models.
+
+**Option 3: Pre-bundle Models**
 1. Place GGUF files in `assets/models/` directory
 2. Add them to `pubspec.yaml` under assets
 3. Run `flutter pub get`
@@ -90,11 +103,17 @@ This app uses `llama_cpp_dart` (v0.1.2+1) to run GGUF quantized models directly 
 
 ### File Picker & Permissions
 
-The app uses Android's Storage Access Framework (SAF) which handles file access permissions automatically:
-- **No runtime permissions needed** - The system manages access
-- **Large file warnings** - Alerts when selecting files > 500MB
-- **File validation** - Checks that selected files exist and are readable
-- **Persistent access** - Models are copied to app storage for future use
+**File Size Limitations:**
+- The Android file picker has memory constraints and may crash with files >1GB
+- This is a limitation of the Android system, not the app
+- **Workaround**: Place large model files directly in `Android/data/com.example.ondevice_slm_app/files/models/`
+
+**Storage Access:**
+- The app uses Android's Storage Access Framework (SAF)
+- No runtime permissions needed for the file picker
+- Large file warnings alert when selecting files > 500MB
+- File validation checks that selected files exist and are readable
+- Persistent access - Models are copied to app storage for future use
 
 ## Architecture
 
@@ -132,7 +151,8 @@ lib/
 - Try a smaller quantized model
 
 ### File Picker Not Working
-- The app uses SAF - no permissions should be needed
+- For files >1GB, use direct file placement (see "How to Add Models")
+- The app uses SAF - no permissions should be needed for smaller files
 - Try restarting the app
 - Check device storage is not full
 
