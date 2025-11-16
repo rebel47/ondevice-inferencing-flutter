@@ -19,7 +19,7 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: HomeScreen(),
+      home: const HomeScreen(),
       routes: {
         '/chat': (_) => ChatScreen(inferenceService: LlamaService()),
       },

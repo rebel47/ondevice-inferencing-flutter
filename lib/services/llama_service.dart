@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart';
 import 'package:http/http.dart' as http;
@@ -117,7 +118,7 @@ class LlamaService implements InferenceService {
       _currentModelPath = modelPath;
       return true;
     } catch (e) {
-      print('Error loading model: $e');
+      debugPrint('Error loading model: $e');
       _loaded = false;
       return false;
     }
@@ -139,7 +140,7 @@ class LlamaService implements InferenceService {
     _currentGeneration = _llamaController!.generate(
       prompt: input,
       maxTokens: 512,
-      temperature: 0.7,
+      temperature: 0.2,
     ).listen(
       (token) {
         buffer.write(token);
@@ -175,7 +176,7 @@ class LlamaService implements InferenceService {
     _currentGeneration = _llamaController!.generate(
       prompt: input,
       maxTokens: 512,
-      temperature: 0.7,
+      temperature: 0.2,
     ).listen(
       (token) => controller.add(token),
       onDone: () {
