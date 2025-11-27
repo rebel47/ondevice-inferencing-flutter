@@ -3,12 +3,13 @@
 // Features:
 // - Universal chat templates for LLaMA, Mistral, Qwen, Phi, Gemma, Alpaca
 // - Auto-detection from filename or GGUF metadata
-// - Memory manager with summarization
+// - Memory manager with summarization and persistent storage
 // - Prompt builder with token trimming
 // - Coherence checks
 // - Model quality detection
 
 import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// ---------------------------
 /// Chat Model Type & Templates
@@ -193,7 +194,7 @@ class ModelDetector {
 enum ModelQuality { good, fair, poor }
 
 /// ---------------------------
-/// Memory manager
+/// Memory manager with persistent storage
 /// ---------------------------
 
 class MemoryManager {
@@ -205,10 +206,18 @@ class MemoryManager {
   // thresholds
   final int maxShortTermTurns;
   final int maxSummaryChars;
+  
+  // Persistent storage key prefix
+  static const String _factsKeyPrefix = 'memory_facts_';
+  final String sessionId; // unique ID for this session's memory
 
   String _summary = '';
 
-  MemoryManager({this.maxShortTermTurns = 6, this.maxSummaryChars = 800});
+  MemoryManager({
+    this.maxShortTermTurns = 6, 
+    this.maxSummaryChars = 800,
+    this.sessionId = 'default',
+  });
 
   List<Map<String, String>> get history => List.unmodifiable(_history);
   String get summary => _summary;
@@ -251,10 +260,51 @@ class MemoryManager {
     return buffer.toString();
   }
 
+  /// Load facts from persistent storage (SharedPreferences)
+  Future<void> loadFacts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = '$_factsKeyPrefix$sessionId';
+      final factsJson = prefs.getString(key);
+      if (factsJson != null && factsJson.isNotEmpty) {
+        final decoded = jsonDecode(factsJson) as Map<String, dynamic>;
+        facts.clear();
+        decoded.forEach((k, v) => facts[k] = v.toString());
+      }
+    } catch (e) {
+      // Fail silently - facts are optional enhancement
+    }
+  }
+
+  /// Save facts to persistent storage (SharedPreferences)
+  Future<void> saveFacts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = '$_factsKeyPrefix$sessionId';
+      final factsJson = jsonEncode(facts);
+      await prefs.setString(key, factsJson);
+    } catch (e) {
+      // Fail silently
+    }
+  }
+
   void clear() {
     _history.clear();
     _summary = '';
     facts.clear();
+    // Note: We don't clear persistent storage here - use clearPersistent() for that
+  }
+
+  /// Clear both in-memory and persistent storage
+  Future<void> clearPersistent() async {
+    clear();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = '$_factsKeyPrefix$sessionId';
+      await prefs.remove(key);
+    } catch (e) {
+      // Fail silently
+    }
   }
 }
 

@@ -20,6 +20,10 @@ class LlamaService implements InferenceService {
   String? _currentModelName;
   StreamSubscription? _currentGeneration;
   ChatModelType? _detectedModelType;
+  
+  // Coherence checking and retry logic
+  final CoherenceChecker _coherenceChecker = const CoherenceChecker();
+  final int maxRetries = 2;
 
   /// Make sure [modelId] is available locally. If not, attempt to copy the
   /// model from assets (asset path is 'assets/models/<modelId>.gguf') or
@@ -181,40 +185,70 @@ class LlamaService implements InferenceService {
       throw Exception('Model not loaded');
     }
 
-    // Cancel any previous generation
-    await stopGeneration();
-
-    // Build proper prompt using chat template
-    final String formattedPrompt = buildPromptForModel(
-      modelNameOrArch: _currentModelName ?? model,
-      systemPrompt: systemPrompt ?? 'You are a helpful assistant.',
-      history: conversationHistory ?? [],
-      userMessage: userMessage,
-    );
-
-    debugPrint('Using chat template for $_detectedModelType');
-    debugPrint('Formatted prompt length: ${formattedPrompt.length} chars');
-
-    // Create a stream controller to handle the generation
-    final controller = StreamController<String>();
+    int attempt = 0;
+    double currentTemperature = 0.2;
     
-    _currentGeneration = _llamaController!.generate(
-      prompt: formattedPrompt,
-      maxTokens: 512,
-      temperature: 0.2,
-    ).listen(
-      (token) => controller.add(token),
-      onDone: () {
-        _currentGeneration = null;
-        controller.close();
-      },
-      onError: (error) {
-        _currentGeneration = null;
-        controller.addError(error);
-      },
-    );
+    while (attempt <= maxRetries) {
+      attempt++;
+      
+      // Cancel any previous generation
+      await stopGeneration();
 
-    yield* controller.stream;
+      // Build proper prompt using chat template
+      final String formattedPrompt = buildPromptForModel(
+        modelNameOrArch: _currentModelName ?? model,
+        systemPrompt: systemPrompt ?? 'You are a helpful assistant.',
+        history: conversationHistory ?? [],
+        userMessage: userMessage,
+      );
+
+      debugPrint('Using chat template for $_detectedModelType (attempt $attempt)');
+      debugPrint('Formatted prompt length: ${formattedPrompt.length} chars');
+
+      // Create a stream controller to handle the generation
+      final controller = StreamController<String>();
+      final buffer = StringBuffer();
+      
+      _currentGeneration = _llamaController!.generate(
+        prompt: formattedPrompt,
+        maxTokens: 512,
+        temperature: currentTemperature,
+      ).listen(
+        (token) {
+          buffer.write(token);
+          controller.add(token);
+        },
+        onDone: () {
+          _currentGeneration = null;
+          controller.close();
+        },
+        onError: (error) {
+          _currentGeneration = null;
+          controller.addError(error);
+        },
+      );
+
+      // Stream tokens and collect for coherence check
+      await for (final token in controller.stream) {
+        yield token;
+      }
+
+      // Check coherence after generation completes
+      final fullText = buffer.toString();
+      final isCoherent = _coherenceChecker.looksCoherent(fullText);
+      
+      if (isCoherent || attempt > maxRetries) {
+        // Success or final attempt - accept the response
+        if (!isCoherent) {
+          debugPrint('WARNING: Incoherent response after $maxRetries retries');
+        }
+        return;
+      } else {
+        // Failed coherence check - retry with lower temperature
+        debugPrint('Coherence check failed (attempt $attempt/$maxRetries), retrying...');
+        currentTemperature = (currentTemperature * 0.7).clamp(0.05, 1.0);
+      }
+    }
   }
 
   /// Stop any ongoing generation

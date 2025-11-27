@@ -10,6 +10,7 @@ import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import '../widgets/chat_bubble.dart';
 import '../models/chat_session.dart';
+import '../models/chat_template.dart';
 
 class ChatScreen extends StatefulWidget {
   final InferenceService inferenceService;
@@ -29,6 +30,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _cancelRequested = false;
   String _model = 'gemma';
   List<String> _availableModels = [];
+  String _searchQuery = ''; // For session search
   static const _prefsLastModelKey = 'last_model';
   static const _prefsSessionsKey = 'chat_sessions_v1';
 
@@ -208,16 +210,162 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {});
   }
 
+  /// Export all sessions to JSON file
+  Future<void> _exportSessions() async {
+    try {
+      // Prepare JSON data
+      final sessionsData = _sessions.values.map((s) => s.toJson()).toList();
+      final jsonString = const JsonEncoder.withIndent('  ').convert({
+        'exported_at': DateTime.now().toIso8601String(),
+        'app_version': '1.0.0',
+        'sessions': sessionsData,
+      });
+
+      // Get export directory
+      final docDir = await getApplicationDocumentsDirectory();
+      final exportDir = Directory(p.join(docDir.path, 'exports'));
+      if (!await exportDir.exists()) await exportDir.create(recursive: true);
+
+      // Create file with timestamp
+      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.')[0];
+      final fileName = 'chat_sessions_$timestamp.json';
+      final file = File(p.join(exportDir.path, fileName));
+      await file.writeAsString(jsonString);
+
+      debugPrint('Exported sessions to: ${file.path}');
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle, color: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Exported ${_sessions.length} session(s) to:\n${file.path}')),
+            ],
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'OK',
+            textColor: Colors.white,
+            onPressed: () {},
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error exporting sessions: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Export failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  /// Import sessions from JSON file
+  Future<void> _importSessions() async {
+    try {
+      debugPrint('Opening file picker for import...');
+
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: false,
+      );
+
+      if (result == null || result.files.single.path == null) {
+        debugPrint('Import cancelled');
+        return;
+      }
+
+      final filePath = result.files.single.path!;
+      final file = File(filePath);
+
+      if (!await file.exists()) {
+        throw Exception('File not found');
+      }
+
+      final jsonString = await file.readAsString();
+      final data = jsonDecode(jsonString) as Map<String, dynamic>;
+      final sessionsList = data['sessions'] as List<dynamic>;
+
+      // Parse sessions
+      final importedSessions = <String, ChatSession>{};
+      for (final sessionData in sessionsList) {
+        final session = ChatSession.fromJson(sessionData as Map<String, dynamic>);
+        importedSessions[session.id] = session;
+      }
+
+      if (importedSessions.isEmpty) {
+        throw Exception('No valid sessions found in file');
+      }
+
+      // Merge with existing sessions (keep existing if ID conflicts)
+      int newCount = 0;
+      int skippedCount = 0;
+      for (final entry in importedSessions.entries) {
+        if (_sessions.containsKey(entry.key)) {
+          skippedCount++;
+        } else {
+          _sessions[entry.key] = entry.value;
+          newCount++;
+        }
+      }
+
+      await _saveSessions();
+      setState(() {});
+
+      debugPrint('Imported $newCount new sessions, skipped $skippedCount duplicates');
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Imported $newCount session(s)${skippedCount > 0 ? ', skipped $skippedCount duplicate(s)' : ''}',
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error importing sessions: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Import failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   Future<void> _showSessionsMenu() async {
+    // Reset search on open
+    _searchQuery = '';
+    
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (c) => DraggableScrollableSheet(
-        initialChildSize: 0.6,
-        minChildSize: 0.3,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (context, scrollController) => Container(
+      builder: (c) => StatefulBuilder(
+        builder: (context, setModalState) {
+          // Filter sessions based on search query
+          final filteredSessions = _sessions.values.where((session) {
+            if (_searchQuery.isEmpty) return true;
+            final query = _searchQuery.toLowerCase();
+            return session.name.toLowerCase().contains(query) ||
+                   session.systemPrompt.toLowerCase().contains(query) ||
+                   session.messages.any((msg) => msg.text.toLowerCase().contains(query));
+          }).toList();
+
+          return DraggableScrollableSheet(
+            initialChildSize: 0.6,
+            minChildSize: 0.3,
+            maxChildSize: 0.9,
+            expand: false,
+            builder: (context, scrollController) => Container(
           decoration: BoxDecoration(
             color: Theme.of(context).scaffoldBackgroundColor,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
@@ -249,6 +397,41 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     ),
                     const Spacer(),
+                    // Export/Import menu
+                    PopupMenuButton<String>(
+                      icon: const Icon(Icons.more_vert),
+                      tooltip: 'More options',
+                      onSelected: (value) async {
+                        Navigator.pop(c);
+                        if (value == 'export') {
+                          await _exportSessions();
+                        } else if (value == 'import') {
+                          await _importSessions();
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'export',
+                          child: Row(
+                            children: [
+                              Icon(Icons.upload, size: 18),
+                              SizedBox(width: 12),
+                              Text('Export Sessions'),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'import',
+                          child: Row(
+                            children: [
+                              Icon(Icons.download, size: 18),
+                              SizedBox(width: 12),
+                              Text('Import Sessions'),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                     IconButton(
                       icon: const Icon(Icons.add_circle),
                       tooltip: 'New Session',
@@ -261,43 +444,75 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
               const Divider(height: 1),
+              // Search Bar
+              if (_sessions.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: TextField(
+                    decoration: InputDecoration(
+                      hintText: 'Search sessions...',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                setModalState(() {
+                                  _searchQuery = '';
+                                });
+                              },
+                            )
+                          : null,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    ),
+                    onChanged: (value) {
+                      setModalState(() {
+                        _searchQuery = value;
+                      });
+                    },
+                  ),
+                ),
               // Sessions List
               Expanded(
-                child: _sessions.isEmpty
+                child: filteredSessions.isEmpty
                     ? Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(
-                              Icons.chat_bubble_outline,
+                              _searchQuery.isEmpty ? Icons.chat_bubble_outline : Icons.search_off,
                               size: 64,
                               color: Colors.grey[300],
                             ),
                             const SizedBox(height: 16),
                             Text(
-                              'No sessions yet',
+                              _searchQuery.isEmpty ? 'No sessions yet' : 'No matching sessions',
                               style: TextStyle(
                                 fontSize: 16,
                                 color: Colors.grey[600],
                               ),
                             ),
-                            const SizedBox(height: 8),
-                            ElevatedButton.icon(
-                              onPressed: () async {
-                                Navigator.pop(c);
-                                await _createNewSession();
-                              },
-                              icon: const Icon(Icons.add),
-                              label: const Text('Create First Session'),
-                            ),
+                            if (_searchQuery.isEmpty) ...[
+                              const SizedBox(height: 8),
+                              ElevatedButton.icon(
+                                onPressed: () async {
+                                  Navigator.pop(c);
+                                  await _createNewSession();
+                                },
+                                icon: const Icon(Icons.add),
+                                label: const Text('Create First Session'),
+                              ),
+                            ],
                           ],
                         ),
                       )
                     : ListView.builder(
                         controller: scrollController,
-                        itemCount: _sessions.length,
+                        itemCount: filteredSessions.length,
                         itemBuilder: (context, index) {
-                          final session = _sessions.values.toList()[index];
+                          final session = filteredSessions[index];
                           final isActive = _activeSessionId == session.id;
                           final messageCount = session.messages.length;
                           
@@ -470,9 +685,11 @@ class _ChatScreenState extends State<ChatScreen> {
             ],
           ),
         ),
-      ),
-    );
-  }
+      );
+      },
+    ),
+  );
+}
 
   Future<void> _loadLastSelectedModel() async {
     final prefs = await SharedPreferences.getInstance();
@@ -929,20 +1146,62 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: Text('No models found', style: TextStyle(fontStyle: FontStyle.italic)),
                 )
               else
-                ..._availableModels.map((m) => PopupMenuItem(
-                  value: m,
-                  child: Row(
-                    children: [
-                      Icon(
-                        _model == m ? Icons.check_circle : Icons.circle_outlined,
-                        size: 18,
-                        color: _model == m ? Colors.green : Colors.grey,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text(m)),
-                    ],
-                  ),
-                )),
+                ..._availableModels.map((m) {
+                  final quality = ModelDetector.detectQuality(m);
+                  final qualityColor = quality == ModelQuality.good
+                      ? Colors.green
+                      : quality == ModelQuality.fair
+                          ? Colors.orange
+                          : Colors.red;
+                  final qualityText = quality == ModelQuality.good
+                      ? 'Good'
+                      : quality == ModelQuality.fair
+                          ? 'Fair'
+                          : 'Poor';
+                  
+                  return PopupMenuItem(
+                    value: m,
+                    child: Row(
+                      children: [
+                        Icon(
+                          _model == m ? Icons.check_circle : Icons.circle_outlined,
+                          size: 18,
+                          color: _model == m ? Colors.green : Colors.grey,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(m, style: const TextStyle(fontSize: 14)),
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: qualityColor.withValues(alpha: 0.2),
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(color: qualityColor, width: 1),
+                                    ),
+                                    child: Text(
+                                      qualityText,
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                        color: qualityColor,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
               const PopupMenuDivider(),
               const PopupMenuItem(
                 value: '__import__',
