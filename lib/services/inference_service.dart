@@ -6,13 +6,29 @@ abstract class InferenceService {
 
   /// Generate a reply streaming tokens as they become available. Each token
   /// should be emitted by the returned Stream so UI can append it.
-  Stream<String> generateReplyStream(String input, String model);
+  /// 
+  /// [systemPrompt] - Optional system prompt to guide model behavior
+  /// [conversationHistory] - List of previous turns: [{"user": "...", "assistant": "..."}]
+  /// [userMessage] - Current user message
+  /// [model] - Model identifier
+  Stream<String> generateReplyStream(
+    String userMessage,
+    String model, {
+    String? systemPrompt,
+    List<Map<String, String>>? conversationHistory,
+  });
 
   /// Optional: prepare or download model resources on device. Default noop.
   Future<void> prepareModel(String model, {String? downloadUrl});
 
   /// List models available in the app's models directory. Default empty list.
   Future<List<String>> listLocalModels();
+  
+  /// Stop current generation (if supported)
+  Future<void> stopGeneration();
+  
+  /// Clean up resources
+  void dispose();
 }
 
 /// A very small stub used for local development/tests. Replace with real
@@ -36,9 +52,14 @@ class MockInferenceService implements InferenceService {
   }
 
   @override
-  Stream<String> generateReplyStream(String input, String model) async* {
+  Stream<String> generateReplyStream(
+    String userMessage,
+    String model, {
+    String? systemPrompt,
+    List<Map<String, String>>? conversationHistory,
+  }) async* {
     // Keep tests deterministic: yield tokens synchronously.
-    final reply = await generateReply(input, model);
+    final reply = await generateReply(userMessage, model);
     for (final chunk in reply.split(' ')) {
       yield '$chunk ';
     }
@@ -52,4 +73,14 @@ class MockInferenceService implements InferenceService {
 
   @override
   Future<List<String>> listLocalModels() async => [];
+  
+  @override
+  Future<void> stopGeneration() async {
+    // No-op for mock
+  }
+  
+  @override
+  void dispose() {
+    // No-op for mock
+  }
 }

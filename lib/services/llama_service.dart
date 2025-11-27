@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'inference_service.dart';
+import '../models/chat_template.dart';
 
 /// A service that loads a GGUF model (from app assets or from a remote URL)
 /// and streams generation tokens using llama_flutter_android plugin.
@@ -16,7 +17,9 @@ class LlamaService implements InferenceService {
   LlamaController? _llamaController;
   bool _loaded = false;
   String? _currentModelPath;
+  String? _currentModelName;
   StreamSubscription? _currentGeneration;
+  ChatModelType? _detectedModelType;
 
   /// Make sure [modelId] is available locally. If not, attempt to copy the
   /// model from assets (asset path is 'assets/models/<modelId>.gguf') or
@@ -116,6 +119,12 @@ class LlamaService implements InferenceService {
       
       _loaded = true;
       _currentModelPath = modelPath;
+      
+      // Auto-detect model type from filename
+      _currentModelName = p.basenameWithoutExtension(modelPath);
+      _detectedModelType = detectModelType(_currentModelName!);
+      debugPrint('Detected model type: $_detectedModelType for $_currentModelName');
+      
       return true;
     } catch (e) {
       debugPrint('Error loading model: $e');
@@ -159,7 +168,12 @@ class LlamaService implements InferenceService {
   }
 
   @override
-  Stream<String> generateReplyStream(String input, String model) async* {
+  Stream<String> generateReplyStream(
+    String userMessage,
+    String model, {
+    String? systemPrompt,
+    List<Map<String, String>>? conversationHistory,
+  }) async* {
     final modelPath = await ensureModelAvailable(model);
     await loadModel(modelPath);
 
@@ -170,11 +184,22 @@ class LlamaService implements InferenceService {
     // Cancel any previous generation
     await stopGeneration();
 
+    // Build proper prompt using chat template
+    final String formattedPrompt = buildPromptForModel(
+      modelNameOrArch: _currentModelName ?? model,
+      systemPrompt: systemPrompt ?? 'You are a helpful assistant.',
+      history: conversationHistory ?? [],
+      userMessage: userMessage,
+    );
+
+    debugPrint('Using chat template for $_detectedModelType');
+    debugPrint('Formatted prompt length: ${formattedPrompt.length} chars');
+
     // Create a stream controller to handle the generation
     final controller = StreamController<String>();
     
     _currentGeneration = _llamaController!.generate(
-      prompt: input,
+      prompt: formattedPrompt,
       maxTokens: 512,
       temperature: 0.2,
     ).listen(
@@ -193,6 +218,7 @@ class LlamaService implements InferenceService {
   }
 
   /// Stop any ongoing generation
+  @override
   Future<void> stopGeneration() async {
     if (_currentGeneration != null) {
       await _currentGeneration!.cancel();
@@ -204,14 +230,17 @@ class LlamaService implements InferenceService {
   }
 
   /// Clean up resources
-  Future<void> dispose() async {
-    await stopGeneration();
+  @override
+  void dispose() {
+    stopGeneration();
     
     if (_llamaController != null) {
-      await _llamaController!.dispose();
+      _llamaController!.dispose();
       _llamaController = null;
     }
     _loaded = false;
     _currentModelPath = null;
+    _currentModelName = null;
+    _detectedModelType = null;
   }
 }

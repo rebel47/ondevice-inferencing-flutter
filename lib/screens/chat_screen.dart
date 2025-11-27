@@ -793,17 +793,41 @@ class _ChatScreenState extends State<ChatScreen> {
       // Prepare model (download/copy if needed)
       await widget.inferenceService.prepareModel(_model);
 
-      // Prepare prompt with system prompt (if any)
-      String promptToSend = text;
+      // Get system prompt and conversation history
+      String systemPrompt = 'You are a helpful assistant.';
+      List<Map<String, String>> conversationHistory = [];
+      
       if (_activeSessionId != null && _sessions.containsKey(_activeSessionId)) {
         final sess = _sessions[_activeSessionId!]!;
         if (sess.systemPrompt.trim().isNotEmpty) {
-          promptToSend = '${sess.systemPrompt}\n\n$text';
+          systemPrompt = sess.systemPrompt;
+        }
+        
+        // Build conversation history from previous messages (exclude current user message)
+        for (int i = 0; i < sess.messages.length - 1; i += 2) {
+          if (i + 1 < sess.messages.length) {
+            final userMsg = sess.messages[i];
+            final assistantMsg = sess.messages[i + 1];
+            if (userMsg.role == MessageRole.user && assistantMsg.role == MessageRole.assistant) {
+              conversationHistory.add({
+                'user': userMsg.text,
+                'assistant': assistantMsg.text,
+              });
+            }
+          }
         }
       }
 
-      // Stream reply tokens and append to UI as they arrive
-      final tokenStream = widget.inferenceService.generateReplyStream(promptToSend, _model);
+      debugPrint('Sending with ${conversationHistory.length} previous turns');
+
+      // Stream reply tokens with proper chat formatting
+      final tokenStream = widget.inferenceService.generateReplyStream(
+        text,
+        _model,
+        systemPrompt: systemPrompt,
+        conversationHistory: conversationHistory,
+      );
+      
       _messages.add(ChatMessage('', MessageRole.assistant));
 
       // If we have an active session, create placeholder assistant message so we can stream into it
@@ -856,10 +880,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _cancelRequested = true;
-    // Try to stop any ongoing generation on the service if it supports it.
-    try {
-      (widget.inferenceService as dynamic).stopGeneration();
-    } catch (_) {}
+    // Stop any ongoing generation on the service
+    widget.inferenceService.stopGeneration();
     _controller.dispose();
     super.dispose();
   }
